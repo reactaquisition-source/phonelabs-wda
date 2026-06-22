@@ -1,0 +1,51 @@
+name: PhoneLabs WDA Build (iOS real device)
+
+# Build WebDriverAgent (vanilla in Phase 1, +H.264 server in Phase 2) UNSIGNED
+# for real iOS devices on a free macOS runner. Output = a .ipa artifact we then
+# sign on Windows with our own Apple cert (zsign) and install via go-ios.
+
+on:
+  workflow_dispatch:
+
+env:
+  XCODE_VERSION: "16.4"
+
+jobs:
+  build-ios:
+    name: Build unsigned WDA .ipa for iOS
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "${{ env.XCODE_VERSION }}"
+
+      - name: Build WDA (unsigned, real device)
+        run: sh "$GITHUB_WORKSPACE/Scripts/ci/build-real.sh"
+        env:
+          DERIVED_DATA_PATH: appium_wda_ios
+          SCHEME: WebDriverAgentRunner
+          DESTINATION: generic/platform=iOS
+          WD: appium_wda_ios/Build/Products/Debug-iphoneos
+          ZIP_PKG_NAME: WebDriverAgentRunner-Runner.zip
+
+      - name: Package the .app into a signable .ipa
+        run: |
+          set -e
+          rm -rf ipa
+          mkdir -p ipa/Payload
+          unzip -q WebDriverAgentRunner-Runner.zip -d ipa/Payload
+          ( cd ipa && zip -qr ../WebDriverAgentRunner-Runner.ipa Payload )
+          echo "=== .ipa built ==="
+          ls -la WebDriverAgentRunner-Runner.ipa
+          unzip -l WebDriverAgentRunner-Runner.ipa | head -20
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WDA-PhoneLabs-ipa
+          path: WebDriverAgentRunner-Runner.ipa
+          if-no-files-found: error
