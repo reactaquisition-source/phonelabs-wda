@@ -138,10 +138,24 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   if (NULL == image) {
     return NULL;
   }
-  size_t w = CGImageGetWidth(image);
-  size_t h = CGImageGetHeight(image);
-  // libx264/VideoToolbox-friendly even dimensions are not required for VT, but
-  // keep it tidy. VT handles odd sizes; we keep native resolution.
+  size_t origW = CGImageGetWidth(image);
+  size_t origH = CGImageGetHeight(image);
+  size_t w = origW, h = origH;
+  // Optional downscale (env H264_MAX_WIDTH) -> lower latency + bitrate for remote
+  // control. Read once; 0/unset = native resolution. CGContextDrawImage scales the
+  // full-res image into the smaller buffer below.
+  static size_t maxW = (size_t)-1;
+  if (maxW == (size_t)-1) {
+    NSString *mw = NSProcessInfo.processInfo.environment[@"H264_MAX_WIDTH"];
+    maxW = (mw.length > 0 && [mw integerValue] > 0) ? (size_t)[mw integerValue] : 0;
+  }
+  if (maxW > 0 && origW > maxW) {
+    double scale = (double)maxW / (double)origW;
+    w = ((size_t)(origW * scale)) & ~(size_t)1;   // even dims (H.264-friendly)
+    h = ((size_t)(origH * scale)) & ~(size_t)1;
+    if (w < 2) w = 2;
+    if (h < 2) h = 2;
+  }
 
   NSDictionary *attrs = @{
     (id)kCVPixelBufferCGImageCompatibilityKey: @YES,
@@ -182,13 +196,26 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   [self teardownSession];
 
   VTCompressionSessionRef session = NULL;
+  // Low-latency rate control (iOS 14.5+) -> minimal encoder buffering for real-time.
+  NSDictionary *encoderSpec = @{ (id)kVTVideoEncoderSpecification_EnableLowLatencyRateControl: @YES };
   OSStatus st = VTCompressionSessionCreate(kCFAllocatorDefault,
                                            (int32_t)w, (int32_t)h,
                                            kCMVideoCodecType_H264,
-                                           NULL, NULL, NULL,
+                                           (__bridge CFDictionaryRef)encoderSpec, NULL, NULL,
                                            FBH264OutputCallback,
                                            (__bridge void *)self,
                                            &session);
+  if (st != noErr || NULL == session) {
+    // Fallback for devices/OS without low-latency rate control.
+    session = NULL;
+    st = VTCompressionSessionCreate(kCFAllocatorDefault,
+                                    (int32_t)w, (int32_t)h,
+                                    kCMVideoCodecType_H264,
+                                    NULL, NULL, NULL,
+                                    FBH264OutputCallback,
+                                    (__bridge void *)self,
+                                    &session);
+  }
   if (st != noErr || NULL == session) {
     [FBLogger logFmt:@"[H264] VTCompressionSessionCreate failed: %d", (int)st];
     return;
@@ -199,6 +226,7 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(H264_GOP));
   VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(H264_BITRATE));
   VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(H264_FPS));
+  VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxFrameDelayCount, (__bridge CFTypeRef)@0);  // n'attends pas de frames -> latence mini
   VTCompressionSessionPrepareToEncodeFrames(session);
 
   self.session = session;
