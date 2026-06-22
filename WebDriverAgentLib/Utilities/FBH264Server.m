@@ -337,7 +337,8 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   if (keyframe) {
     CMFormatDescriptionRef fmt = CMSampleBufferGetFormatDescription(sampleBuffer);
     if (NULL != fmt) {
-      size_t paramCount = 0, naluHeaderLen = 0;
+      size_t paramCount = 0;
+      int naluHeaderLen = 0;
       const uint8_t *sps = NULL; size_t spsLen = 0;
       const uint8_t *pps = NULL; size_t ppsLen = 0;
       if (noErr == CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, 0, &sps, &spsLen, &paramCount, &naluHeaderLen)
