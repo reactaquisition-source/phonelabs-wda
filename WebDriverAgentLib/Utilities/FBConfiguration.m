@@ -165,6 +165,23 @@ static BOOL FBShouldEnforceCustomSnapshots = NO;
   return DefaultMjpegServerPort;
 }
 
++ (NSInteger)h264ServerPort
+{
+  // PhoneLabs: on-device hardware H.264 stream. Disabled unless explicitly set,
+  // so vanilla WDA behaviour is unchanged.
+  NSString *fromArgs = [self valueFromArguments:NSProcessInfo.processInfo.arguments
+                                         forKey:@"--h264-server-port"];
+  NSInteger port = [fromArgs integerValue];
+  if (port > 0) {
+    return port;
+  }
+  NSString *env = NSProcessInfo.processInfo.environment[@"H264_SERVER_PORT"];
+  if (env.length > 0 && [env integerValue] > 0) {
+    return [env integerValue];
+  }
+  return -1;
+}
+
 + (UInt64)httpRequestBodySizeLimit
 {
   NSString *limit = NSProcessInfo.processInfo.environment[@"MAX_HTTP_REQUEST_BODY_SIZE"];

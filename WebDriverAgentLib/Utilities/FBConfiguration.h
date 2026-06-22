@@ -133,6 +133,12 @@ extern NSString *const FBSnapshotMaxDepthKey;
 + (NSInteger)mjpegServerPort;
 
 /**
+ PhoneLabs: TCP port for the on-device hardware H.264 stream, or -1 if disabled
+ (enabled via --h264-server-port argument or H264_SERVER_PORT env variable).
+ */
++ (NSInteger)h264ServerPort;
+
+/**
  The maximum allowed HTTP request body size in bytes.
  Defaults to 1GB and can be overridden with the MAX_HTTP_REQUEST_BODY_SIZE environment variable.
  */
