@@ -104,9 +104,17 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
     }
   }
 
+  // Qualité de capture réglable (env H264_QUALITY en %, défaut 50). Plus bas = JPEG plus
+  // petit -> capture testmanagerd plus rapide/régulière -> +fps, surtout EN MOUVEMENT
+  // (l'écran qui change rend la capture plus lente). Le H.264 final reste piloté par le débit.
+  static double s_quality = -1;
+  if (s_quality < 0) {
+    NSString *q = NSProcessInfo.processInfo.environment[@"H264_QUALITY"];
+    s_quality = (q.length > 0) ? MAX(0.1, MIN(1.0, [q doubleValue] / 100.0)) : 0.5;
+  }
   NSError *error;
   NSData *jpeg = [FBScreenshot takeInOriginalResolutionWithScreenID:self.mainScreenID
-                                                compressionQuality:CAPTURE_QUALITY
+                                                compressionQuality:s_quality
                                                                uti:UTTypeJPEG
                                                            timeout:FRAME_TIMEOUT
                                                              error:&error];
