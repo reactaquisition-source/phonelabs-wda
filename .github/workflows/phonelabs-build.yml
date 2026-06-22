@@ -24,24 +24,34 @@ jobs:
           xcode-version: "${{ env.XCODE_VERSION }}"
 
       - name: Build WDA (unsigned, real device)
-        run: sh "$GITHUB_WORKSPACE/Scripts/ci/build-real.sh"
-        env:
-          DERIVED_DATA_PATH: appium_wda_ios
-          SCHEME: WebDriverAgentRunner
-          DESTINATION: generic/platform=iOS
-          WD: appium_wda_ios/Build/Products/Debug-iphoneos
-          ZIP_PKG_NAME: WebDriverAgentRunner-Runner.zip
-
-      - name: Package the .app into a signable .ipa
         run: |
           set -e
-          rm -rf ipa
-          mkdir -p ipa/Payload
-          unzip -q WebDriverAgentRunner-Runner.zip -d ipa/Payload
-          ( cd ipa && zip -qr ../WebDriverAgentRunner-Runner.ipa Payload )
-          echo "=== .ipa built ==="
-          ls -la WebDriverAgentRunner-Runner.ipa
-          unzip -l WebDriverAgentRunner-Runner.ipa | head -20
+          xcodebuild clean build-for-testing \
+            -project WebDriverAgent.xcodeproj \
+            -derivedDataPath appium_wda_ios \
+            -scheme WebDriverAgentRunner \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO ARCHS=arm64
+
+      - name: Package the full .app into a signable .ipa
+        run: |
+          set -e
+          APP_DIR="appium_wda_ios/Build/Products/Debug-iphoneos"
+          echo "=== build products ==="
+          ls -la "$APP_DIR"
+          echo "=== .app tree (depth 3) ==="
+          find "$APP_DIR/WebDriverAgentRunner-Runner.app" -maxdepth 3 | sort
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_DIR/WebDriverAgentRunner-Runner.app" Payload/
+          # XCTest frameworks are provided by the device DeveloperDiskImage on
+          # real devices -> drop them to keep the package lean (mirrors Appium).
+          rm -rf Payload/WebDriverAgentRunner-Runner.app/Frameworks/XC*.framework
+          rm -rf Payload/WebDriverAgentRunner-Runner.app/Frameworks/Testing.framework
+          rm -f  Payload/WebDriverAgentRunner-Runner.app/Frameworks/libXCTestSwiftSupport.dylib
+          zip -qry WebDriverAgentRunner-Runner.ipa Payload
+          echo "=== .ipa contents ==="
+          unzip -l WebDriverAgentRunner-Runner.ipa
 
       - name: Upload .ipa artifact
         uses: actions/upload-artifact@v4
