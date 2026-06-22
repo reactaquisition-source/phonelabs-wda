@@ -31,7 +31,8 @@ jobs:
             -derivedDataPath appium_wda_ios \
             -scheme WebDriverAgentRunner \
             -destination "generic/platform=iOS" \
-            CODE_SIGNING_ALLOWED=NO ARCHS=arm64
+            CODE_SIGNING_ALLOWED=NO ARCHS=arm64 \
+            RUN_CLANG_STATIC_ANALYZER=NO
 
       - name: Package the full .app into a signable .ipa
         run: |
