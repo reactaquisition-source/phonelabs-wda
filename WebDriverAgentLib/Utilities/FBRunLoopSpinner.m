@@ -13,6 +13,10 @@
 #import "FBErrorBuilder.h"
 
 static const NSTimeInterval FBWaitInterval = 0.1;
+// PhoneLabs : poll serré pour la complétion des EVENTS (taps/swipes/etc.) -> on rend la main
+// dès la fin de l'event au lieu d'attendre le prochain tick de 100 ms (latence tap divisée).
+// On garde FBWaitInterval=0.1 pour les attentes d'éléments (pas critique, économise du CPU).
+static const NSTimeInterval FBCompletionWaitInterval = 0.002;
 
 @interface FBRunLoopSpinner ()
 @property (nonatomic, copy) NSString *timeoutErrorMessage;
@@ -29,7 +33,7 @@ static const NSTimeInterval FBWaitInterval = 0.1;
     atomic_fetch_or(&didFinish, true);
   });
   while (!atomic_fetch_and(&didFinish, false)) {
-    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:FBWaitInterval]];
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:FBCompletionWaitInterval]];
   }
 }
 
