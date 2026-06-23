@@ -31,7 +31,9 @@
 #import "XCUIElement+FBIsVisible.h"
 #import "XCUIElementQuery.h"
 #import "FBUnattachedAppLauncher.h"
-#import "XCEventGenerator.h"
+#import "XCPointerEventPath.h"
+#import "XCSynthesizedEventRecord.h"
+#import "FBXCTestDaemonsProxy.h"
 
 @implementation FBCustomCommands
 
@@ -330,26 +332,18 @@
   }
   CGPoint pt = CGPointMake(x.doubleValue, y.doubleValue);
   UIInterfaceOrientation orientation = XCUIApplication.fb_systemApplication.interfaceOrientation;
-  // XCEventGenerator est une classe XCTest PRIVÉE non link-able directement (erreur de link sur
-  // _OBJC_CLASS_$_XCEventGenerator). On la résout dynamiquement -> aucune ref au symbole de classe.
-  Class genClass = NSClassFromString(@"XCEventGenerator");
-  if (nil == genClass) {
-    return FBResponseWithStatus([FBCommandStatus unknownErrorWithMessage:@"XCEventGenerator unavailable" traceback:nil]);
-  }
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-  id gen = [genClass performSelector:@selector(sharedGenerator)];
-#pragma clang diagnostic pop
-  __block NSError *blockError = nil;
-  dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-  XCEventGeneratorHandler handler = ^(XCSynthesizedEventRecord *record, NSError *error) {
-    blockError = error;
-    dispatch_semaphore_signal(sem);
-  };
-  [gen tapAtPoint:pt orientation:orientation handler:handler];
-  dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)));
-  if (blockError) {
-    return FBResponseWithStatus([FBCommandStatus unknownErrorWithMessage:blockError.description traceback:nil]);
+  // Méthode d'HC BOX : on construit un XCSynthesizedEventRecord MINIMAL (touch down + up immédiat)
+  // et on le synthétise directement via FBXCTestDaemonsProxy -> on saute toute l'orchestration
+  // W3C de /actions. (Classes link-ables, utilisées par le tap appium, OK sur iOS 26.)
+  XCPointerEventPath *path = [[XCPointerEventPath alloc] initForTouchAtPoint:pt offset:0.0];
+  [path pressDownAtOffset:0.0];
+  [path liftUpAtOffset:0.0];
+  XCSynthesizedEventRecord *record = [[XCSynthesizedEventRecord alloc] initWithName:@"FastTap"
+                                                              interfaceOrientation:orientation];
+  [record addPointerEventPath:path];
+  NSError *error = nil;
+  if (![FBXCTestDaemonsProxy synthesizeEventWithRecord:record error:&error]) {
+    return FBResponseWithStatus([FBCommandStatus unknownErrorWithMessage:error.description traceback:nil]);
   }
   return FBResponseWithOK();
 }
