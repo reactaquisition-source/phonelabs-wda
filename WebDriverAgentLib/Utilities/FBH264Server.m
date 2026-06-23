@@ -119,13 +119,16 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                                            timeout:FRAME_TIMEOUT
                                                              error:&error];
   if (nil == jpeg) {
-    [FBLogger logFmt:@"[H264] screenshot failed: %@", error.description];
+    NSLog(@"[PLH264] screenshot FAILED: %@", error.description);
     [self scheduleNextFrameWithInterval:interval timeStarted:started];
     return;
   }
+  if (self.frameIndex < 8) { NSLog(@"[PLH264] screenshot ok: %lu bytes", (unsigned long)jpeg.length); }
 
   CVPixelBufferRef pixelBuffer = [self pixelBufferFromJPEG:jpeg];
-  if (NULL != pixelBuffer) {
+  if (NULL == pixelBuffer) {
+    if (self.frameIndex < 8) { NSLog(@"[PLH264] pixelBufferFromJPEG returned NULL"); }
+  } else {
     [self encodePixelBuffer:pixelBuffer];
     CVPixelBufferRelease(pixelBuffer);
   }
@@ -215,6 +218,7 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                            &session);
   if (st != noErr || NULL == session) {
     // Fallback for devices/OS without low-latency rate control.
+    NSLog(@"[PLH264] LLRC session create failed (%d) -> fallback standard", (int)st);
     session = NULL;
     st = VTCompressionSessionCreate(kCFAllocatorDefault,
                                     (int32_t)w, (int32_t)h,
@@ -225,7 +229,7 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                     &session);
   }
   if (st != noErr || NULL == session) {
-    [FBLogger logFmt:@"[H264] VTCompressionSessionCreate failed: %d", (int)st];
+    NSLog(@"[PLH264] VTCompressionSessionCreate FAILED: %d", (int)st);
     return;
   }
   VTSessionSetProperty(session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
@@ -241,7 +245,7 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   self.encWidth = w;
   self.encHeight = h;
   self.forceKeyframe = YES; // first frame of a new session must be a keyframe
-  [FBLogger logFmt:@"[H264] encoder ready %zux%zu", w, h];
+  NSLog(@"[PLH264] encoder ready %zux%zu (createStatus=%d)", w, h, (int)st);
 }
 
 - (void)encodePixelBuffer:(CVPixelBufferRef)pixelBuffer
@@ -268,7 +272,9 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                                 (__bridge CFDictionaryRef)frameProps,
                                                 NULL, &flags);
   if (st != noErr) {
-    [FBLogger logFmt:@"[H264] encode frame failed: %d", (int)st];
+    NSLog(@"[PLH264] encodeFrame FAILED: %d", (int)st);
+  } else if (self.frameIndex < 8) {
+    NSLog(@"[PLH264] encodeFrame submitted ok (frame %lld flags %u)", (long long)self.frameIndex, (unsigned)flags);
   }
 }
 
@@ -290,6 +296,8 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
     if (!self.isStreaming || 0 == self.listeningClients.count) {
       return;
     }
+    static int s_send = 0;
+    if (s_send++ < 8) { NSLog(@"[PLH264] sendAnnexB %lu bytes -> %lu client(s)", (unsigned long)data.length, (unsigned long)self.listeningClients.count); }
     for (GCDAsyncSocket *client in self.listeningClients) {
       [client writeData:data withTimeout:FRAME_TIMEOUT tag:0];
     }
@@ -355,6 +363,8 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                  CMSampleBufferRef sampleBuffer)
 {
   if (status != noErr || NULL == sampleBuffer || !CMSampleBufferDataIsReady(sampleBuffer)) {
+    NSLog(@"[PLH264] callback EARLY-RETURN status=%d sb=%p ready=%d", (int)status, (void *)sampleBuffer,
+          (sampleBuffer ? (int)CMSampleBufferDataIsReady(sampleBuffer) : -1));
     return;
   }
   FBH264Server *server = (__bridge FBH264Server *)outputRefCon;
@@ -408,7 +418,11 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
     }
   }
 
+  static int s_cbOk = 0;
   if (out.length > 0) {
+    if (s_cbOk++ < 8) { NSLog(@"[PLH264] callback ok: keyframe=%d out=%lu bytes", keyframe, (unsigned long)out.length); }
     [server sendAnnexB:out];
+  } else {
+    NSLog(@"[PLH264] callback produced 0 bytes (keyframe=%d)", keyframe);
   }
 }
