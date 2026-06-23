@@ -207,27 +207,17 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   [self teardownSession];
 
   VTCompressionSessionRef session = NULL;
-  // Low-latency rate control (iOS 14.5+) -> minimal encoder buffering for real-time.
-  NSDictionary *encoderSpec = @{ (id)kVTVideoEncoderSpecification_EnableLowLatencyRateControl: @YES };
+  // iOS 26 FIX: EnableLowLatencyRateControl + MaxFrameDelayCount=0 (added in f61803b)
+  // make the encoder accept frames but emit NOTHING on iOS 26 (silent: the output
+  // callback never fires -> 0 bytes). Revert to the plain real-time H.264 encoder,
+  // which is rock-solid across iOS versions.
   OSStatus st = VTCompressionSessionCreate(kCFAllocatorDefault,
                                            (int32_t)w, (int32_t)h,
                                            kCMVideoCodecType_H264,
-                                           (__bridge CFDictionaryRef)encoderSpec, NULL, NULL,
+                                           NULL, NULL, NULL,
                                            FBH264OutputCallback,
                                            (__bridge void *)self,
                                            &session);
-  if (st != noErr || NULL == session) {
-    // Fallback for devices/OS without low-latency rate control.
-    NSLog(@"[PLH264] LLRC session create failed (%d) -> fallback standard", (int)st);
-    session = NULL;
-    st = VTCompressionSessionCreate(kCFAllocatorDefault,
-                                    (int32_t)w, (int32_t)h,
-                                    kCMVideoCodecType_H264,
-                                    NULL, NULL, NULL,
-                                    FBH264OutputCallback,
-                                    (__bridge void *)self,
-                                    &session);
-  }
   if (st != noErr || NULL == session) {
     NSLog(@"[PLH264] VTCompressionSessionCreate FAILED: %d", (int)st);
     return;
@@ -238,7 +228,6 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(H264_GOP));
   VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(H264_BITRATE));
   VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(H264_FPS));
-  VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxFrameDelayCount, (__bridge CFTypeRef)@0);  // n'attends pas de frames -> latence mini
   VTCompressionSessionPrepareToEncodeFrames(session);
 
   self.session = session;
