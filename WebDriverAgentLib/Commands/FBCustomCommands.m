@@ -330,14 +330,23 @@
   }
   CGPoint pt = CGPointMake(x.doubleValue, y.doubleValue);
   UIInterfaceOrientation orientation = XCUIApplication.fb_systemApplication.interfaceOrientation;
+  // XCEventGenerator est une classe XCTest PRIVÉE non link-able directement (erreur de link sur
+  // _OBJC_CLASS_$_XCEventGenerator). On la résout dynamiquement -> aucune ref au symbole de classe.
+  Class genClass = NSClassFromString(@"XCEventGenerator");
+  if (nil == genClass) {
+    return FBResponseWithStatus([FBCommandStatus unknownErrorWithMessage:@"XCEventGenerator unavailable" traceback:nil]);
+  }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+  id gen = [genClass performSelector:@selector(sharedGenerator)];
+#pragma clang diagnostic pop
   __block NSError *blockError = nil;
   dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-  [[XCEventGenerator sharedGenerator] tapAtPoint:pt
-                                     orientation:orientation
-                                         handler:^(XCSynthesizedEventRecord *record, NSError *error) {
+  XCEventGeneratorHandler handler = ^(XCSynthesizedEventRecord *record, NSError *error) {
     blockError = error;
     dispatch_semaphore_signal(sem);
-  }];
+  };
+  [gen tapAtPoint:pt orientation:orientation handler:handler];
   dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)));
   if (blockError) {
     return FBResponseWithStatus([FBCommandStatus unknownErrorWithMessage:blockError.description traceback:nil]);
