@@ -24,6 +24,19 @@ static const NSUInteger H264_GOP = 30;          // keyframe every ~1s
 static const NSTimeInterval FRAME_TIMEOUT = 1.0;
 static const NSTimeInterval CAPTURE_QUALITY = 0.85;
 
+// PLDIAG: compteurs internes pour diagnostiquer l'échec SILENCIEUX de l'encodeur sur iOS 26.
+// NSLog est invisible (ni syslog ni log runwda) -> quand la capture tourne mais 0 octet ne
+// sort, on PUBLIE l'état en clair sur le socket H.264 lui-même (le client /h264 le lit).
+static int  g_plCap = 0;        // frames capturées (screenshot+pixelbuffer OK)
+static int  g_plEncAtt = 0;     // appels à VTCompressionSessionEncodeFrame
+static int  g_plEncErr = 0;     // dernier status d'erreur d'encode (!=0 = échec)
+static int  g_plSessSt = 999;   // status de VTCompressionSessionCreate
+static int  g_plCbFire = 0;     // callbacks de sortie reçus (0 = encodeur muet)
+static int  g_plCbEarly = 0;    // callbacks abandonnés (early-return)
+static int  g_plCbEarlySt = 0;  // dernier status d'un early-return
+static long g_plBytes = 0;      // octets H.264 réels émis
+static int  g_plDiagSent = 0;   // diag déjà publié ?
+
 @interface FBH264Server ()
 
 @property (nonatomic, readonly) dispatch_queue_t backgroundQueue;
@@ -126,11 +139,20 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   if (self.frameIndex < 8) { NSLog(@"[PLH264] screenshot ok: %lu bytes", (unsigned long)jpeg.length); }
 
   CVPixelBufferRef pixelBuffer = [self pixelBufferFromJPEG:jpeg];
-  if (NULL == pixelBuffer) {
-    if (self.frameIndex < 8) { NSLog(@"[PLH264] pixelBufferFromJPEG returned NULL"); }
-  } else {
+  if (NULL != pixelBuffer) {
+    g_plCap++;
     [self encodePixelBuffer:pixelBuffer];
     CVPixelBufferRelease(pixelBuffer);
+  }
+
+  // PLDIAG: la capture tourne mais 0 octet réel n'est sorti -> publie l'état UNE fois sur le
+  // socket H.264 (le client /h264 le lit en clair). Inerte en fonctionnement normal (bytes>0 vite).
+  if (!g_plDiagSent && g_plCap > 40 && g_plBytes == 0) {
+    g_plDiagSent = 1;
+    char b[256];
+    int n = snprintf(b, sizeof(b), "PLDIAG cap=%d encAtt=%d encErr=%d sessSt=%d cbFire=%d cbEarly=%d cbEarlySt=%d bytes=%ld\n",
+                     g_plCap, g_plEncAtt, g_plEncErr, g_plSessSt, g_plCbFire, g_plCbEarly, g_plCbEarlySt, g_plBytes);
+    [self sendAnnexB:[NSData dataWithBytes:b length:(NSUInteger)n]];
   }
 
   [self scheduleNextFrameWithInterval:interval timeStarted:started];
@@ -218,8 +240,8 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                            FBH264OutputCallback,
                                            (__bridge void *)self,
                                            &session);
+  g_plSessSt = (int)st;
   if (st != noErr || NULL == session) {
-    NSLog(@"[PLH264] VTCompressionSessionCreate FAILED: %d", (int)st);
     return;
   }
   VTSessionSetProperty(session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
@@ -260,10 +282,9 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                                 kCMTimeInvalid,
                                                 (__bridge CFDictionaryRef)frameProps,
                                                 NULL, &flags);
+  g_plEncAtt++;
   if (st != noErr) {
-    NSLog(@"[PLH264] encodeFrame FAILED: %d", (int)st);
-  } else if (self.frameIndex < 8) {
-    NSLog(@"[PLH264] encodeFrame submitted ok (frame %lld flags %u)", (long long)self.frameIndex, (unsigned)flags);
+    g_plEncErr = (int)st;
   }
 }
 
@@ -351,9 +372,9 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                  OSStatus status, VTEncodeInfoFlags infoFlags,
                                  CMSampleBufferRef sampleBuffer)
 {
+  g_plCbFire++;
   if (status != noErr || NULL == sampleBuffer || !CMSampleBufferDataIsReady(sampleBuffer)) {
-    NSLog(@"[PLH264] callback EARLY-RETURN status=%d sb=%p ready=%d", (int)status, (void *)sampleBuffer,
-          (sampleBuffer ? (int)CMSampleBufferDataIsReady(sampleBuffer) : -1));
+    g_plCbEarly++; g_plCbEarlySt = (int)status;
     return;
   }
   FBH264Server *server = (__bridge FBH264Server *)outputRefCon;
@@ -407,11 +428,8 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
     }
   }
 
-  static int s_cbOk = 0;
   if (out.length > 0) {
-    if (s_cbOk++ < 8) { NSLog(@"[PLH264] callback ok: keyframe=%d out=%lu bytes", keyframe, (unsigned long)out.length); }
+    g_plBytes += (long)out.length;
     [server sendAnnexB:out];
-  } else {
-    NSLog(@"[PLH264] callback produced 0 bytes (keyframe=%d)", keyframe);
   }
 }
