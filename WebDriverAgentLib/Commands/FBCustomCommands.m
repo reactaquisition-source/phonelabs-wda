@@ -31,6 +31,7 @@
 #import "XCUIElement+FBIsVisible.h"
 #import "XCUIElementQuery.h"
 #import "FBUnattachedAppLauncher.h"
+#import "XCEventGenerator.h"
 
 @implementation FBCustomCommands
 
@@ -62,6 +63,8 @@
     [[FBRoute POST:@"/wda/pressButton"] respondWithTarget:self action:@selector(handlePressButtonCommand:)],
     [[FBRoute POST:@"/wda/performAccessibilityAudit"] respondWithTarget:self action:@selector(handlePerformAccessibilityAudit:)],
     [[FBRoute POST:@"/wda/performIoHidEvent"] respondWithTarget:self action:@selector(handlePeformIOHIDEvent:)],
+    [[FBRoute POST:@"/wda/fasttap"] respondWithTarget:self action:@selector(handleFastTap:)],
+    [[FBRoute POST:@"/wda/fasttap"].withoutSession respondWithTarget:self action:@selector(handleFastTap:)],
     [[FBRoute POST:@"/wda/expectNotification"] respondWithTarget:self action:@selector(handleExpectNotification:)],
     [[FBRoute POST:@"/wda/siri/activate"] respondWithTarget:self action:@selector(handleActivateSiri:)],
     [[FBRoute POST:@"/wda/apps/launchUnattached"].withoutSession respondWithTarget:self action:@selector(handleLaunchUnattachedApp:)],
@@ -311,6 +314,33 @@
                                                        error:&error]) {
     return FBResponseWithStatus([FBCommandStatus unknownErrorWithMessage:error.description
                                                                traceback:nil]);
+  }
+  return FBResponseWithOK();
+}
+
++ (id <FBResponsePayload>)handleFastTap:(FBRouteRequest *)request
+{
+  // Tap RAPIDE : XCEventGenerator (générateur d'événements in-process, file _eventQueue)
+  // au lieu de l'API W3C /actions (qui construit un gros graphe d'actions -> ~287 ms).
+  // x/y en POINTS logiques (même repère que /actions, pas de pixels). Pas d'entitlement requis.
+  NSNumber *x = request.arguments[@"x"];
+  NSNumber *y = request.arguments[@"y"];
+  if (nil == x || nil == y) {
+    return FBResponseWithStatus([FBCommandStatus invalidArgumentErrorWithMessage:@"'x' and 'y' are required" traceback:nil]);
+  }
+  CGPoint pt = CGPointMake(x.doubleValue, y.doubleValue);
+  UIInterfaceOrientation orientation = XCUIApplication.fb_systemApplication.interfaceOrientation;
+  __block NSError *blockError = nil;
+  dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+  [[XCEventGenerator sharedGenerator] tapAtPoint:pt
+                                     orientation:orientation
+                                         handler:^(XCSynthesizedEventRecord *record, NSError *error) {
+    blockError = error;
+    dispatch_semaphore_signal(sem);
+  }];
+  dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)));
+  if (blockError) {
+    return FBResponseWithStatus([FBCommandStatus unknownErrorWithMessage:blockError.description traceback:nil]);
   }
   return FBResponseWithOK();
 }
