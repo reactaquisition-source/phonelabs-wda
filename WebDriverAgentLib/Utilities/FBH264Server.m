@@ -35,6 +35,8 @@ static int  g_plCbFire = 0;     // callbacks de sortie reçus (0 = encodeur muet
 static int  g_plCbEarly = 0;    // callbacks abandonnés (early-return)
 static int  g_plCbEarlySt = 0;  // dernier status d'un early-return
 static long g_plBytes = 0;      // octets H.264 réels émis
+static int  g_plIter = 0;       // itérations streamFrame avec client (toujours +1, même si capture KO)
+static int  g_plShotNil = 0;    // screenshots revenus nil (FBScreenshot a échoué sur la file de fond)
 static int  g_plDiagSent = 0;   // diag déjà publié ?
 
 @interface FBH264Server ()
@@ -125,6 +127,7 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
     NSString *q = NSProcessInfo.processInfo.environment[@"H264_QUALITY"];
     s_quality = (q.length > 0) ? MAX(0.1, MIN(1.0, [q doubleValue] / 100.0)) : 0.5;
   }
+  g_plIter++;
   NSError *error;
   NSData *jpeg = [FBScreenshot takeInOriginalResolutionWithScreenID:self.mainScreenID
                                                 compressionQuality:s_quality
@@ -132,7 +135,7 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
                                                            timeout:FRAME_TIMEOUT
                                                              error:&error];
   if (nil == jpeg) {
-    NSLog(@"[PLH264] screenshot FAILED: %@", error.description);
+    g_plShotNil++;
     [self scheduleNextFrameWithInterval:interval timeStarted:started];
     return;
   }
@@ -147,11 +150,11 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
 
   // PLDIAG: la capture tourne mais 0 octet réel n'est sorti -> publie l'état UNE fois sur le
   // socket H.264 (le client /h264 le lit en clair). Inerte en fonctionnement normal (bytes>0 vite).
-  if (!g_plDiagSent && g_plCap > 40 && g_plBytes == 0) {
+  if (!g_plDiagSent && g_plIter > 40 && g_plBytes == 0) {
     g_plDiagSent = 1;
     char b[256];
-    int n = snprintf(b, sizeof(b), "PLDIAG cap=%d encAtt=%d encErr=%d sessSt=%d cbFire=%d cbEarly=%d cbEarlySt=%d bytes=%ld\n",
-                     g_plCap, g_plEncAtt, g_plEncErr, g_plSessSt, g_plCbFire, g_plCbEarly, g_plCbEarlySt, g_plBytes);
+    int n = snprintf(b, sizeof(b), "PLDIAG iter=%d shotNil=%d cap=%d encAtt=%d encErr=%d sessSt=%d cbFire=%d cbEarly=%d cbEarlySt=%d bytes=%ld\n",
+                     g_plIter, g_plShotNil, g_plCap, g_plEncAtt, g_plEncErr, g_plSessSt, g_plCbFire, g_plCbEarly, g_plCbEarlySt, g_plBytes);
     [self sendAnnexB:[NSData dataWithBytes:b length:(NSUInteger)n]];
   }
 
@@ -334,7 +337,10 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   // New client: force the next encoded frame to be a keyframe so it gets
   // SPS/PPS + an IDR immediately (otherwise jMuxer cannot start decoding).
   self.forceKeyframe = YES;
-  [FBLogger logFmt:@"[H264] streaming to client at %@:%d", client.connectedHost, client.connectedPort];
+  // PLDIAG: ping immédiat à la connexion -> prouve que le chemin socket marche
+  // INDÉPENDAMMENT de la capture/encode. Si le PC reçoit "PLHELLO", le socket est OK.
+  const char *hello = "PLHELLO\n";
+  [self sendAnnexB:[NSData dataWithBytes:hello length:8]];
 }
 
 - (void)didClientDisconnect:(GCDAsyncSocket *)client
