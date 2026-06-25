@@ -19,7 +19,7 @@
 #import "XCUIScreen.h"
 
 static const NSUInteger H264_FPS = 30;          // capture/encode target fps
-static const NSUInteger H264_BITRATE = 3000000; // ~3 Mbps
+static const NSUInteger H264_BITRATE = 1200000; // ~1.2 Mbps — défaut "ami réseau distant" (= HC BOX) ; surchargé par env H264_BITRATE
 static const NSUInteger H264_GOP = 30;          // keyframe every ~1s
 static const NSTimeInterval FRAME_TIMEOUT = 1.0;
 static const NSTimeInterval CAPTURE_QUALITY = 0.85;
@@ -251,7 +251,19 @@ static void FBH264OutputCallback(void *outputRefCon, void *sourceRefCon,
   VTSessionSetProperty(session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Main_AutoLevel);
   VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
   VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(H264_GOP));
-  VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(H264_BITRATE));
+  // Débit cible RÉGLABLE (env H264_BITRATE) — défaut "ami réseau distant" (comme HC BOX). Plus bas =
+  // moins d'upload -> pas de bufferbloat chez les VA distants quand l'écran bouge.
+  static NSUInteger s_bitrate = 0;
+  if (s_bitrate == 0) {
+    NSString *bv = NSProcessInfo.processInfo.environment[@"H264_BITRATE"];
+    s_bitrate = (bv.length > 0 && [bv integerValue] > 0) ? (NSUInteger)[bv integerValue] : H264_BITRATE;
+  }
+  VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(s_bitrate));
+  // PLAFOND DUR (= ce que fait HC BOX) : DataRateLimits empêche un BURST sur mouvement de dépasser
+  // l'upload -> l'encodeur baisse la qualité ~0,5 s au lieu d'exploser le débit. Fenêtre 1 s, ~1.3x.
+  // (Propriété standard et ancienne ; si iOS 26 boudait, PLDIAG le signalerait -> on l'enlèverait.)
+  VTSessionSetProperty(session, kVTCompressionPropertyKey_DataRateLimits,
+                       (__bridge CFArrayRef)@[@((NSInteger)((double)s_bitrate / 8.0 * 1.3)), @(1.0)]);
   VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(H264_FPS));
   VTCompressionSessionPrepareToEncodeFrames(session);
 
